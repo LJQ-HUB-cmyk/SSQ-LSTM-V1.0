@@ -1,198 +1,112 @@
-name: Shuangseqiu LSTM Prediction System
+name: SSQ LSTM Prediction
 
 on:
   schedule:
-    # UTC时间周日、周二、周四的 22:00，对应北京时间周一、周三、周五的 6:00
-    - cron: '0 22 * * 0,2,4'
-  workflow_dispatch:
+    # 周一、周三、周五北京时间6:00 (UTC+8, 所以UTC时间是22:00前一天)
+    - cron: '0 22 * * 0,2,4'  # UTC时间周日、周二、周四22:00
+  workflow_dispatch:  # 允许手动触发
 
-# 为GitHub Actions添加必要的权限
-permissions:
-  contents: write        # 允许读写仓库内容
-  actions: read         # 允许读取Actions
-  checks: write         # 允许写入检查状态
-  pull-requests: write  # 允许操作PR（如果需要）
+env:
+  PYTHON_VERSION: '3.9'
+  TZ: Asia/Shanghai
 
 jobs:
-  ssq_prediction_process:
+  predict:
     runs-on: ubuntu-latest
-    env:
-      TZ: Asia/Shanghai # Set timezone for consistent date/time operations
-
+    timeout-minutes: 60  # 设置超时时间
+    
     steps:
-    - name: Checkout repository
+    - name: Checkout code
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0 # Fetch all history for git operations
-
-    - name: Set up Python 3.9
-      uses: actions/setup-python@v5
+        fetch-depth: 0  # 获取完整历史记录
+        
+    - name: Set up Python
+      uses: actions/setup-python@v4
       with:
-        python-version: 3.9
-
-    - name: Cache pip dependencies
-      uses: actions/cache@v4
-      with:
-        path: ~/.cache/pip
-        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-pip-
-
-    - name: Install dependencies
+        python-version: ${{ env.PYTHON_VERSION }}
+        cache: 'pip'
+        
+    - name: Install system dependencies
       run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential \
+          pkg-config \
+          python3-dev
+        
+    - name: Upgrade pip and install dependencies
+      run: |
+        python -m pip install --upgrade pip wheel setuptools
+        pip install --no-cache-dir -r requirements.txt
+        
+    - name: Verify installation
+      run: |
+        python -c "import tensorflow as tf; print('TensorFlow version:', tf.__version__)"
+        python -c "import pandas as pd; print('Pandas version:', pd.__version__)"
+        python -c "import numpy as np; print('NumPy version:', np.__version__)"
+        
     - name: Create necessary directories
       run: |
-        mkdir -p data
-        mkdir -p models
-        mkdir -p prediction_history
-        mkdir -p reports
-
-    - name: Run data acquisition and prediction
-      run: python ssq_automation.py
+        mkdir -p data models prediction_history
+        chmod 755 data models prediction_history
+        
+    - name: Set up environment
+      run: |
+        echo "GITHUB_ACTIONS=true" >> $GITHUB_ENV
+        echo "TF_CPP_MIN_LOG_LEVEL=2" >> $GITHUB_ENV
+        echo "PYTHONUNBUFFERED=1" >> $GITHUB_ENV
+        
+    - name: Run SSQ LSTM Prediction System
       env:
         WXPUSHER_APP_TOKEN: ${{ secrets.WXPUSHER_APP_TOKEN }}
         WXPUSHER_USER_UIDS: ${{ secrets.WXPUSHER_USER_UIDS }}
         WXPUSHER_TOPIC_IDS: ${{ secrets.WXPUSHER_TOPIC_IDS }}
-
-    - name: Create fixed filename copy of latest prediction report
       run: |
-        set -e
-        latest_report_file=$(find . -maxdepth 1 -name 'ssq_prediction_report_*.txt' -print0 | xargs -0 ls -1 | sort -r | head -n 1)
-        if [ -n "$latest_report_file" ] && [ -f "$latest_report_file" ]; then
-          cp "$latest_report_file" "latest_ssq_prediction.txt"
-          echo "Created fixed filename copy: latest_ssq_prediction.txt from $latest_report_file"
-        else
-          echo "No ssq_prediction_report_*.txt files found, or latest_report_file variable is empty. Skipping copy."
+        echo "开始运行双色球LSTM预测系统..."
+        python -u ssq_automation.py
+        
+    - name: Check output files
+      run: |
+        echo "检查生成的文件..."
+        ls -la data/ || echo "data/ 目录不存在或为空"
+        ls -la models/ || echo "models/ 目录不存在或为空"
+        ls -la prediction_history/ || echo "prediction_history/ 目录不存在或为空"
+        
+    - name: Clean up old files
+      run: |
+        echo "清理旧文件..."
+        # 只保留最近10个预测报告
+        if [ -d "prediction_history" ] && [ "$(ls -A prediction_history)" ]; then
+          cd prediction_history
+          ls -t *.csv 2>/dev/null | tail -n +11 | xargs -r rm -f
+          cd ..
         fi
-
-    - name: Clean old reports - keep only latest 5
+        
+        # 清理训练图片
+        rm -f training_history.png
+        
+    - name: Commit and push if changes
       run: |
-        set -e
-        echo "--- Cleaning old prediction reports ---"
-        mapfile -t reports < <(find . -maxdepth 1 -name 'ssq_prediction_report_*.txt' -print0 | xargs -0 ls -1 | sort)
-        count=${#reports[@]}
-        keep=5
-        echo "Found $count reports. Configured to keep $keep latest."
-        if [ "$count" -gt "$keep" ]; then
-          num_to_delete=$((count - keep))
-          echo "Deleting $num_to_delete oldest reports:"
-          for i in $(seq 0 $((num_to_delete - 1))); do
-            report_to_delete="${reports[$i]}"
-            if [ -f "$report_to_delete" ]; then
-              echo "Removing: $report_to_delete"
-              rm "$report_to_delete"
+        git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        
+        # 检查是否有变更
+        if git diff --quiet && git diff --staged --quiet; then
+          echo "没有需要提交的变更"
+        else
+          echo "发现变更，开始提交..."
+          git add -A
+          git commit -m "🤖 自动更新双色球预测 $(date '+%Y-%m-%d %H:%M:%S CST')" || exit 0
+          
+          # 推送变更，如果失败则重试
+          for i in {1..3}; do
+            if git push; then
+              echo "推送成功"
+              break
             else
-              echo "Skipping (not found): $report_to_delete"
+              echo "推送失败，重试 $i/3..."
+              sleep 5
             fi
           done
-        else
-          echo "No cleanup needed. $count report(s) found (≤ $keep)."
-        fi
-        echo "Listing remaining prediction reports:"
-        find . -maxdepth 1 -name 'ssq_prediction_report_*.txt' | sort
-        echo "--- Finished cleaning reports ---"
-
-    - name: Configure Git
-      run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-
-    - name: Commit updated files
-      run: |
-        set -e
-        echo "--- Staging and Committing Files ---"
-        
-        # 首先添加已跟踪文件的更改
-        git add -u
-        
-        # 定义需要提交的文件列表
-        files_to_commit=(
-          "data/ssq.csv"
-          "prediction_history/predictions.csv"
-          "latest_ssq_prediction.txt"
-          "models/*.keras"
-          "models/*.pkl"
-        )
-        
-        # 逐个检查并添加文件，处理.gitignore的情况
-        for file_pattern in "${files_to_commit[@]}"; do
-          # 使用shell glob扩展来处理通配符
-          for file_path in $file_pattern; do
-            if [ -f "$file_path" ]; then
-              # 检查文件是否被.gitignore忽略
-              if git check-ignore "$file_path" > /dev/null 2>&1; then
-                echo "Warning: $file_path is ignored by .gitignore, force adding..."
-                git add -f "$file_path"
-              else
-                git add "$file_path"
-              fi
-              echo "Staged: $file_path"
-            fi
-          done
-        done
-        
-        # 添加新的预测报告文件
-        find . -maxdepth 1 -name 'ssq_prediction_report_*.txt' -print0 | xargs -0 -r git add
-        echo "Staged any new ssq_prediction_report_*.txt files."
-        
-        # 显示当前状态
-        echo "Current git status:"
-        git status --porcelain
-        
-        # 检查是否有更改需要提交
-        if git diff --staged --quiet; then
-          echo "No changes to commit."
-        else
-          git commit -m "🤖 Auto update: SSQ LSTM Prediction results $(date +'%Y-%m-%d %H:%M:%S %Z')"
-          echo "Changes committed successfully."
-        fi
-        echo "--- Finished Staging and Committing ---"
-
-    - name: Pull remote changes to sync before push
-      run: |
-        set -e
-        echo "--- Syncing with Remote Repository ---"
-        echo "Current branch: $(git rev-parse --abbrev-ref HEAD)"
-        echo "Target branch from GITHUB_REF_NAME: ${{ github.ref_name }}"
-        echo "Remote URL: $(git remote get-url origin)"
-        
-        # 配置Git认证（为pull操作）
-        git config --local url."https://oauth2:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
-        
-        # Set pull strategy to merge (default, but explicit) or rebase
-        git config pull.rebase false # Use 'true' for rebase, 'false' for merge
-        
-        # 检查远程分支是否存在
-        if git ls-remote --exit-code --heads origin ${{ github.ref_name }} >/dev/null 2>&1; then
-          echo "Remote branch exists, pulling changes..."
-          git pull origin ${{ github.ref_name }} --no-edit
-          echo "Successfully pulled and merged remote changes (if any)."
-        else
-          echo "Remote branch does not exist, will create it on first push."
-        fi
-        echo "--- Finished Syncing ---"
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Push changes
-      run: |
-        set -e
-        echo "--- Pushing Changes to Remote ---"
-        
-        # 配置Git认证使用GITHUB_TOKEN
-        git config --local url."https://oauth2:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
-        
-        # 检查是否有更改需要推送
-        if git diff --quiet HEAD^ HEAD 2>/dev/null || [ -z "$(git log --oneline origin/${{ github.ref_name }}..HEAD 2>/dev/null)" ]; then
-          echo "No changes to push or already up to date."
-        else
-          echo "Pushing changes to ${{ github.ref_name }}..."
-          git push origin ${{ github.ref_name }}
-          echo "Successfully pushed changes to remote repository."
-        fi
-        echo "--- Finished Pushing Changes ---"
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
+        fi 

@@ -1,8 +1,34 @@
 import pandas as pd
 import os
 import json
+import logging
 from datetime import datetime
-import streamlit as st
+
+# 环境检测
+IS_GITHUB_ACTIONS = os.getenv('GITHUB_ACTIONS') == 'true'
+IS_STREAMLIT = False
+
+# Streamlit支持
+try:
+    import streamlit as st
+    IS_STREAMLIT = True
+except ImportError:
+    # 创建虚拟streamlit对象
+    class VirtualStreamlit:
+        def success(self, text):
+            if IS_GITHUB_ACTIONS:
+                print(f"::notice title=Success::{text}")
+            else:
+                print(f"✅ {text}")
+        def error(self, text):
+            if IS_GITHUB_ACTIONS:
+                print(f"::error title=Error::{text}")
+            else:
+                print(f"❌ {text}")
+    st = VirtualStreamlit()
+
+# 配置日志
+logger = logging.getLogger(__name__)
 
 class PredictionHistory:
     def __init__(self):
@@ -11,8 +37,14 @@ class PredictionHistory:
         self.params_file = os.path.join(self.history_dir, "parameters.json")
         
         # 创建历史记录目录
-        if not os.path.exists(self.history_dir):
-            os.makedirs(self.history_dir)
+        try:
+            os.makedirs(self.history_dir, exist_ok=True)
+            if IS_GITHUB_ACTIONS:
+                # 确保目录权限正确
+                os.chmod(self.history_dir, 0o755)
+        except Exception as e:
+            logger.error(f"创建历史记录目录失败: {e}")
+            raise
         
         # 初始化历史记录文件
         self._init_history_file()
@@ -85,10 +117,14 @@ class PredictionHistory:
             # 保存到文件
             df.to_csv(self.history_file, index=False, encoding='utf-8')
             
-            st.success(f"预测结果已保存：第{target_period}期")
+            success_msg = f"预测结果已保存：第{target_period}期"
+            logger.info(success_msg)
+            st.success(success_msg)
             
         except Exception as e:
-            st.error(f"保存预测结果时出错: {e}")
+            error_msg = f"保存预测结果时出错: {e}"
+            logger.error(error_msg)
+            st.error(error_msg)
     
     def update_actual_results(self, df_latest):
         """更新实际开奖结果"""
@@ -137,10 +173,14 @@ class PredictionHistory:
             # 保存更新后的历史记录
             if updated_count > 0:
                 history_df.to_csv(self.history_file, index=False, encoding='utf-8')
-                st.success(f"已更新 {updated_count} 条预测记录的实际开奖结果")
+                success_msg = f"已更新 {updated_count} 条预测记录的实际开奖结果"
+                logger.info(success_msg)
+                st.success(success_msg)
             
         except Exception as e:
-            st.error(f"更新实际开奖结果时出错: {e}")
+            error_msg = f"更新实际开奖结果时出错: {e}"
+            logger.error(error_msg)
+            st.error(error_msg)
     
     def get_history(self):
         """获取预测历史"""
@@ -150,7 +190,9 @@ class PredictionHistory:
             else:
                 return pd.DataFrame()
         except Exception as e:
-            st.error(f"读取预测历史时出错: {e}")
+            error_msg = f"读取预测历史时出错: {e}"
+            logger.error(error_msg)
+            st.error(error_msg)
             return pd.DataFrame()
     
     def get_statistics(self):

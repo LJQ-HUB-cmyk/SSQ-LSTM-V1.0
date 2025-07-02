@@ -8,6 +8,8 @@ import plotly.graph_objects as go
 from data_fetcher import fetch_ssq_data, load_local_data, get_latest_period_from_web
 from lstm_model import SSQLSTMModel
 from prediction_history import PredictionHistory
+import os
+import sys
 
 # 页面配置
 st.set_page_config(
@@ -24,6 +26,28 @@ if 'df' not in st.session_state:
     st.session_state.df = None
 if 'prediction_history' not in st.session_state:
     st.session_state.prediction_history = PredictionHistory()
+
+# 检测运行环境
+if __name__ == "__main__":
+    # 如果在GitHub Actions或其他自动化环境中，不启动Streamlit
+    if os.getenv('GITHUB_ACTIONS') == 'true':
+        print("检测到GitHub Actions环境，跳过Streamlit应用启动")
+        print("请使用 ssq_automation.py 进行自动化预测")
+        sys.exit(0)
+    
+    # 检查是否通过streamlit run启动
+    if 'streamlit' not in sys.modules:
+        print("🎯 双色球LSTM预测系统")
+        print("=" * 40)
+        print("请使用以下命令启动Web界面:")
+        print("streamlit run app.py")
+        print("")
+        print("或者使用自动化脚本:")
+        print("python ssq_automation.py")
+        print("")
+        print("测试系统状态:")
+        print("python ssq_automation.py --test")
+        sys.exit(1)
 
 def main():
     st.title("🎱 双色球LSTM预测系统")

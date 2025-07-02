@@ -140,4 +140,25 @@ tmp/
 
 # Large model files (except those needed)
 *.weights
-*.model 
+*.model
+
+# Machine Learning & Data
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+*.joblib
+training_history.png
+model_checkpoints/
+
+# Application specific
+test_*.py
+debug_*.py
+
+# Windows
+*.exe
+*.bat.bak
+
+# Secrets (backup)
+secrets.txt
+config.local.py 
