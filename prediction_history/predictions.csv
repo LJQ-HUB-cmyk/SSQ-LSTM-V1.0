@@ -1,0 +1,1 @@
+prediction_time,target_period,predicted_red_1,predicted_red_2,predicted_red_3,predicted_red_4,predicted_red_5,predicted_red_6,predicted_blue,actual_red_1,actual_red_2,actual_red_3,actual_red_4,actual_red_5,actual_red_6,actual_blue,red_hits,blue_hit,total_hits,training_periods,window_length,epochs,batch_size,learning_rate
