@@ -121,12 +121,17 @@ class SSQAutomation:
                                 'blue_hit': int(latest['blue_hit']),
                                 'total_hits': int(latest['total_hits'])
                             }
-                            send_verification_report(verification_data)
-                            logger.info("验证报告推送成功")
+                            result = send_verification_report(verification_data)
+                            if result.get("success", False):
+                                logger.info("验证报告推送成功")
+                            else:
+                                logger.warning(f"验证报告推送失败: {result.get('error', '未知错误')}")
+                                if IS_GITHUB_ACTIONS:
+                                    print(f"::warning::验证报告推送失败: {result.get('error', '未知错误')}")
                         except Exception as e:
-                            logger.warning(f"验证报告推送失败: {e}")
+                            logger.warning(f"验证报告推送异常: {e}")
                             if IS_GITHUB_ACTIONS:
-                                print(f"::warning::验证报告推送失败: {e}")
+                                print(f"::warning::验证报告推送异常: {e}")
                         
                         return True
             
@@ -219,7 +224,7 @@ class SSQAutomation:
             
             logger.info("开始运行双色球LSTM预测自动化流程...")
             
-            # 测试微信推送
+            # 测试微信推送 - 适配新的返回格式
             wxpusher_available = test_wxpusher_connection()
             if not wxpusher_available:
                 logger.warning("微信推送不可用，将跳过推送步骤，继续执行预测流程")
@@ -253,23 +258,34 @@ class SSQAutomation:
                 logger.info("步骤 4/4: 发送预测报告")
                 if wxpusher_available:
                     try:
-                        send_prediction_report(prediction_period, predicted_numbers, model_params, training_info)
-                        logger.info("预测报告推送成功")
+                        result = send_prediction_report(prediction_period, predicted_numbers, model_params, training_info)
+                        if result.get("success", False):
+                            logger.info("预测报告推送成功")
+                        else:
+                            logger.warning(f"预测报告推送失败: {result.get('error', '未知错误')}")
+                            if IS_GITHUB_ACTIONS:
+                                print(f"::warning::预测报告推送失败: {result.get('error', '未知错误')}")
                     except Exception as e:
-                        logger.warning(f"预测报告推送失败，但预测流程已完成: {e}")
+                        logger.warning(f"预测报告推送异常，但预测流程已完成: {e}")
                         if IS_GITHUB_ACTIONS:
-                            print(f"::warning::预测报告推送失败: {e}")
+                            print(f"::warning::预测报告推送异常: {e}")
                 else:
                     logger.info("跳过预测报告推送（微信推送不可用）")
             
             # 发送日报摘要
             if wxpusher_available:
                 try:
-                    send_daily_summary(prediction_success, verification_success, prediction_period, error_messages)
+                    result = send_daily_summary(prediction_success, verification_success, prediction_period, error_messages)
+                    if result.get("success", False):
+                        logger.info("日报摘要推送成功")
+                    else:
+                        logger.warning(f"日报摘要推送失败: {result.get('error', '未知错误')}")
+                        if IS_GITHUB_ACTIONS:
+                            print(f"::warning::日报摘要推送失败: {result.get('error', '未知错误')}")
                 except Exception as e:
-                    logger.warning(f"日报摘要推送失败: {e}")
+                    logger.warning(f"日报摘要推送异常: {e}")
                     if IS_GITHUB_ACTIONS:
-                        print(f"::warning::日报摘要推送失败: {e}")
+                        print(f"::warning::日报摘要推送异常: {e}")
             else:
                 logger.info("跳过日报摘要推送（微信推送不可用）")
             
@@ -291,15 +307,19 @@ class SSQAutomation:
             
             # 发送错误通知
             try:
-                send_error_notification(str(e))
+                result = send_error_notification(str(e))
+                if not result.get("success", False):
+                    logger.warning(f"错误通知推送失败: {result.get('error', '未知错误')}")
             except Exception as push_error:
-                logger.warning(f"错误通知推送失败: {push_error}")
+                logger.warning(f"错误通知推送异常: {push_error}")
             
             # 即使失败也尝试发送日报摘要
             try:
-                send_daily_summary(prediction_success, verification_success, prediction_period, error_messages)
+                result = send_daily_summary(prediction_success, verification_success, prediction_period, error_messages)
+                if not result.get("success", False):
+                    logger.warning(f"日报摘要推送失败: {result.get('error', '未知错误')}")
             except Exception as summary_error:
-                logger.warning(f"日报摘要推送失败: {summary_error}")
+                logger.warning(f"日报摘要推送异常: {summary_error}")
 
 def main():
     """主函数"""

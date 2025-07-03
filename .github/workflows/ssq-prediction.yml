@@ -66,9 +66,9 @@ jobs:
         echo "开始运行双色球LSTM预测系统..."
         echo "检查微信推送配置..."
         if [ -z "$WXPUSHER_APP_TOKEN" ]; then
-          echo "::warning::WXPUSHER_APP_TOKEN未在Secrets中配置，将使用默认Token"
+          echo "::notice::使用默认微信推送Token（用户真实配置）"
         else
-          echo "::notice::检测到WXPUSHER_APP_TOKEN配置"
+          echo "::notice::使用自定义WXPUSHER_APP_TOKEN配置"
         fi
         python -u ssq_automation.py
         

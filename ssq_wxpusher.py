@@ -19,18 +19,19 @@ IS_GITHUB_ACTIONS = os.getenv('GITHUB_ACTIONS') == 'true'
 # 配置日志
 logger = logging.getLogger(__name__)
 
-# 微信推送配置 - GitHub Actions优化版本  
-# 使用新的有效Token
-APP_TOKEN = os.getenv("WXPUSHER_APP_TOKEN", "AT_uTJ5DKtOY0QP8qkVb0ipOHuPE3Nxjjwl")
+# 微信推送配置 - 使用用户真实配置
+APP_TOKEN = os.getenv("WXPUSHER_APP_TOKEN", "AT_FInZJJ0mUU8xvQjKRP7v6omvuHN3Fdqw")
 
-# 固定用户UID - 根据用户要求
-FIXED_USER_UID = "UID_yYObqdMVScIa66DGR2n2PCRFL10w"
-USER_UIDS = [FIXED_USER_UID]
+# 用户配置 - 根据用户提供的真实配置
+USER_UIDS = ["UID_yYObqdMVScIa66DGR2n2PCRFL10w"]
 
-# 主题ID（可选）
+# 主题ID配置
 TOPIC_IDS = []
+# 如果有环境变量配置，优先使用
 if os.getenv("WXPUSHER_TOPIC_IDS"):
     TOPIC_IDS = [int(x) for x in os.getenv("WXPUSHER_TOPIC_IDS").split(",") if x.strip().isdigit()]
+# 否则可以设置默认主题ID（如果需要的话）
+# TOPIC_IDS = [39909]  # 可以取消注释并设置您的双色球主题ID
 
 def get_latest_verification_result() -> Optional[Dict]:
     """获取最新的验证结果
@@ -75,14 +76,14 @@ def get_latest_verification_result() -> Optional[Dict]:
 
 def send_message(content, summary=None, content_type=1, uids=None, topic_ids=None):
     """
-    发送微信推送消息 - GitHub Actions优化版本
+    发送微信推送消息 - 参考大乐透项目优化版本
     """
     if not APP_TOKEN or APP_TOKEN.strip() == "":
         error_msg = "微信推送Token未配置"
         logger.error(error_msg)
         if IS_GITHUB_ACTIONS:
             print(f"::error title=配置错误::{error_msg}")
-        return False
+        return {"success": False, "error": error_msg}
     
     # 检查Token格式是否有效
     if not APP_TOKEN.startswith("AT_") or len(APP_TOKEN) < 10:
@@ -90,18 +91,16 @@ def send_message(content, summary=None, content_type=1, uids=None, topic_ids=Non
         logger.error(error_msg)
         if IS_GITHUB_ACTIONS:
             print(f"::error title=Token格式错误::{error_msg}")
-        return False
+        return {"success": False, "error": error_msg}
     
-    # 构建消息数据
+    # 构建消息数据 - 参考大乐透项目结构
     data = {
         "appToken": APP_TOKEN,
         "content": content,
         "summary": summary or content[:50],
-        "contentType": content_type
+        "contentType": content_type,
+        "uids": uids or USER_UIDS,
     }
-    
-    # 使用固定的用户UID
-    data["uids"] = USER_UIDS
     
     # 添加主题（如果有）
     if topic_ids:
@@ -114,35 +113,45 @@ def send_message(content, summary=None, content_type=1, uids=None, topic_ids=Non
             print(f"::group::发送微信推送")
             print(f"摘要: {data['summary']}")
         
+        # 使用https协议，参考大乐透项目
         response = requests.post(
-            "http://wxpusher.zjiecode.com/api/send/message",
+            "https://wxpusher.zjiecode.com/api/send/message",
             json=data,
+            headers={"Content-Type": "application/json"},
             timeout=30
         )
         
+        response.raise_for_status()
         result = response.json()
         
-        if result.get("success"):
+        if result.get("success", False):
             logger.info("微信推送发送成功")
             if IS_GITHUB_ACTIONS:
                 print("::notice::微信推送发送成功")
                 print("::endgroup::")
-            return True
+            return {"success": True, "data": result}
         else:
             error_msg = f"微信推送发送失败: {result.get('msg', '未知错误')}"
             logger.error(error_msg)
             if IS_GITHUB_ACTIONS:
                 print(f"::error::{error_msg}")
                 print("::endgroup::")
-            return False
+            return {"success": False, "error": result.get('msg', '推送失败')}
             
-    except Exception as e:
-        error_msg = f"发送微信推送时出错: {e}"
+    except requests.exceptions.RequestException as e:
+        error_msg = f"微信推送网络错误: {e}"
         logger.error(error_msg)
         if IS_GITHUB_ACTIONS:
             print(f"::error::{error_msg}")
             print("::endgroup::")
-        return False
+        return {"success": False, "error": f"网络错误: {str(e)}"}
+    except Exception as e:
+        error_msg = f"微信推送异常: {e}"
+        logger.error(error_msg)
+        if IS_GITHUB_ACTIONS:
+            print(f"::error::{error_msg}")
+            print("::endgroup::")
+        return {"success": False, "error": f"未知异常: {str(e)}"}
 
 def send_prediction_report(target_period: int, predicted_numbers: List[int], 
                           model_params: Dict = None, training_info: Dict = None) -> Dict:
@@ -221,7 +230,8 @@ def send_prediction_report(target_period: int, predicted_numbers: List[int],
 
 💡 仅供参考，理性投注！祝您好运！"""
         
-        return send_message(content, title)
+        result = send_message(content, title)
+        return result
         
     except Exception as e:
         logging.error(f"构建预测报告推送内容失败: {e}")
@@ -293,7 +303,8 @@ def send_verification_report(verification_data: Dict) -> Dict:
 
 ⏰ 验证时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}"""
         
-        return send_message(content, title)
+        result = send_message(content, title)
+        return result
         
     except Exception as e:
         logging.error(f"构建验证报告推送内容失败: {e}")
@@ -320,7 +331,8 @@ def send_error_notification(error_msg: str, script_name: str = "双色球LSTM系
 
 请及时检查系统状态！"""
     
-    return send_message(content, title)
+    result = send_message(content, title)
+    return result
 
 def send_daily_summary(prediction_success: bool, verification_success: bool, 
                       prediction_period: int = None, error_msg: str = None) -> Dict:
@@ -358,57 +370,26 @@ def send_daily_summary(prediction_success: bool, verification_success: bool,
     
     content += "\n\n🔔 系统已自动完成定时任务"
     
-    return send_message(content, title)
+    result = send_message(content, title)
+    return result
 
 def test_wxpusher_connection():
-    """测试微信推送连接"""
-    if not APP_TOKEN or APP_TOKEN.strip() == "":
-        logger.warning("微信推送Token未配置，跳过测试")
-        if IS_GITHUB_ACTIONS:
-            print("::warning::微信推送Token未配置，跳过测试")
-        return False
+    """测试微信推送连接 - 参考大乐透项目实现"""
+    test_content = f"🔧 双色球推送系统测试\n\n测试时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n如收到此消息，说明推送功能正常！"
+    result = send_message(test_content, "🔧 双色球推送测试")
     
-    # 检查Token格式
-    if not APP_TOKEN.startswith("AT_") or len(APP_TOKEN) < 10:
-        logger.warning(f"微信推送Token格式可能无效: {APP_TOKEN[:10]}...")
-        if IS_GITHUB_ACTIONS:
-            print(f"::warning::微信推送Token格式可能无效")
-        return False
+    success = result.get("success", False)
     
-    try:
+    if not success:
+        logger.warning(f"微信推送连接测试失败: {result.get('error', '未知错误')}")
         if IS_GITHUB_ACTIONS:
-            print("::group::测试微信推送连接")
-        
-        test_content = f"""🔧 双色球LSTM预测系统连接测试
-
-✅ 系统状态：正常运行
-🕐 测试时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-👤 接收用户：{FIXED_USER_UID}
-
-如收到此消息，说明微信推送功能正常！"""
-        
-        result = send_message(test_content, "🔧 系统连接测试")
-        
-        if result:
-            logger.info("微信推送连接测试成功")
-            if IS_GITHUB_ACTIONS:
-                print("::notice::微信推送连接测试成功")
-        else:
-            logger.warning("微信推送连接测试失败")
-            if IS_GITHUB_ACTIONS:
-                print("::warning::微信推送连接测试失败")
-        
+            print(f"::warning::微信推送连接测试失败: {result.get('error', '未知错误')}")
+    else:
+        logger.info("微信推送连接测试成功")
         if IS_GITHUB_ACTIONS:
-            print("::endgroup::")
-        
-        return result
-        
-    except Exception as e:
-        logger.error(f"微信推送连接测试异常: {e}")
-        if IS_GITHUB_ACTIONS:
-            print(f"::error::微信推送连接测试异常: {e}")
-            print("::endgroup::")
-        return False
+            print("::notice::微信推送连接测试成功")
+    
+    return success
 
 if __name__ == "__main__":
     # 测试推送功能
