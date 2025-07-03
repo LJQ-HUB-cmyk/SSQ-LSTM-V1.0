@@ -57,8 +57,8 @@ class SSQAutomation:
             'window_length': 7
         }
         
-        # 初始化组件
-        self.model = SSQLSTMModel(**self.model_params)
+        # 初始化组件 - 只传递构造函数接受的参数
+        self.model = SSQLSTMModel(window_length=self.model_params['window_length'])
         self.history = PredictionHistory()
         
         logger.info("双色球LSTM自动化系统初始化完成")

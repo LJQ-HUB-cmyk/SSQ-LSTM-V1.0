@@ -222,49 +222,104 @@ class SSQLSTMModel:
         
         return model
     
-    def train_model(self, x_train, y_train, epochs=1200, batch_size=150, learning_rate=0.0001):
-        """训练模型"""
+    def train_model(self, *args, **kwargs):
+        """训练模型 - 支持两种调用方式"""
+        if len(args) == 1 and isinstance(args[0], pd.DataFrame):
+            # GitHub Actions优化方式：直接传入DataFrame
+            df = args[0]
+            epochs = kwargs.get('epochs', 1200)
+            batch_size = kwargs.get('batch_size', 150)
+            learning_rate = kwargs.get('learning_rate', 0.0001)
+            
+            # 预处理数据
+            x_train, y_train, _ = self.prepare_data(df)
+            
+            # 设置GitHub Actions模式（无GUI）
+            is_github_actions = os.environ.get('GITHUB_ACTIONS') == 'true'
+            
+            return self._train_model_internal(x_train, y_train, epochs, batch_size, learning_rate, is_github_actions)
+            
+        elif len(args) >= 2:
+            # 原程序方式：传入预处理后的数据
+            x_train, y_train = args[0], args[1]
+            epochs = args[2] if len(args) > 2 else kwargs.get('epochs', 1200)
+            batch_size = args[3] if len(args) > 3 else kwargs.get('batch_size', 150)
+            learning_rate = args[4] if len(args) > 4 else kwargs.get('learning_rate', 0.0001)
+            
+            return self._train_model_internal(x_train, y_train, epochs, batch_size, learning_rate, False)
+        else:
+            raise ValueError("无效的参数组合。请传递 (df) 或 (x_train, y_train, epochs, batch_size, learning_rate)")
+    
+    def _train_model_internal(self, x_train, y_train, epochs=1200, batch_size=150, learning_rate=0.0001, is_github_actions=False):
+        """内部训练方法"""
         self.model = self.build_model()
         self.model.compile(optimizer=Adam(learning_rate=learning_rate), loss='mse', metrics=['accuracy'])
         
-        # 创建进度条
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        from tensorflow.keras.callbacks import Callback
-        
-        class ProgressCallback(Callback):
-            def __init__(self, progress_bar, status_text, total_epochs):
-                super().__init__()
-                self.progress_bar = progress_bar
-                self.status_text = status_text
-                self.total_epochs = total_epochs
-            
-            def on_epoch_end(self, epoch, logs=None):
-                progress = (epoch + 1) / self.total_epochs
-                self.progress_bar.progress(progress)
-                self.status_text.text(f'训练进度: {epoch + 1}/{self.total_epochs} epochs, Loss: {logs.get("loss", 0):.6f}')
-        
-        # 自定义回调
-        callback = ProgressCallback(progress_bar, status_text, epochs)
-        
-        # 训练模型
-        history = self.model.fit(
-            x=x_train, 
-            y=y_train, 
-            batch_size=batch_size, 
-            epochs=epochs, 
-            verbose=0,
-            callbacks=[callback]
-        )
-        
-        progress_bar.progress(1.0)
-        status_text.text('训练完成！')
+        if not is_github_actions:
+            # Streamlit环境 - 创建进度条
+            try:
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                from tensorflow.keras.callbacks import Callback
+                
+                class ProgressCallback(Callback):
+                    def __init__(self, progress_bar, status_text, total_epochs):
+                        super().__init__()
+                        self.progress_bar = progress_bar
+                        self.status_text = status_text
+                        self.total_epochs = total_epochs
+                    
+                    def on_epoch_end(self, epoch, logs=None):
+                        progress = (epoch + 1) / self.total_epochs
+                        self.progress_bar.progress(progress)
+                        self.status_text.text(f'训练进度: {epoch + 1}/{self.total_epochs} epochs, Loss: {logs.get("loss", 0):.6f}')
+                
+                # 自定义回调
+                callback = ProgressCallback(progress_bar, status_text, epochs)
+                
+                # 训练模型
+                history = self.model.fit(
+                    x=x_train, 
+                    y=y_train, 
+                    batch_size=batch_size, 
+                    epochs=epochs, 
+                    verbose=0,
+                    callbacks=[callback]
+                )
+                
+                progress_bar.progress(1.0)
+                status_text.text('训练完成！')
+                
+            except ImportError:
+                # Streamlit不可用，使用命令行模式
+                history = self.model.fit(
+                    x=x_train, 
+                    y=y_train, 
+                    batch_size=batch_size, 
+                    epochs=epochs, 
+                    verbose=1
+                )
+        else:
+            # GitHub Actions环境 - 使用命令行模式
+            print(f"开始训练LSTM模型... epochs={epochs}, batch_size={batch_size}")
+            history = self.model.fit(
+                x=x_train, 
+                y=y_train, 
+                batch_size=batch_size, 
+                epochs=epochs, 
+                verbose=1
+            )
+            print("模型训练完成!")
         
         return history
     
     def predict_next_period(self, df, current_period):
-        """预测下一期号码"""
+        """预测下一期号码（原程序兼容方法）"""
+        return self.predict_next_numbers(df)
+    
+    def predict_next_numbers(self, df):
+        """预测下一期号码（主要方法）"""
         if self.model is None:
             raise ValueError("模型尚未训练")
         
@@ -281,6 +336,18 @@ class SSQLSTMModel:
         predicted_numbers = self.scaler.inverse_transform(y_next_pred).astype(int)[0]
         
         return predicted_numbers
+    
+    def get_model_info(self):
+        """获取模型信息"""
+        return {
+            'window_length': self.window_length,
+            'number_of_features': self.number_of_features or 0,
+            'model_architecture': 'Bidirectional LSTM',
+            'layers': 4,
+            'neurons_per_layer': 240,
+            'optimizer': 'Adam',
+            'loss_function': 'mse'
+        }
     
     def backtest_leave_one_out(self, df, training_periods=None, epochs=100, batch_size=150, learning_rate=0.0001):
         """留一验证法回测"""
