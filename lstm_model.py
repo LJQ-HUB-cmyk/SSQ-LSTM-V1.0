@@ -68,6 +68,9 @@ class SSQLSTMModel:
         self.red_scaler = StandardScaler()
         self.blue_scaler = StandardScaler()
         
+        # 添加兼容性属性 - 原程序需要的scaler属性
+        self.scaler = StandardScaler()
+        
         # 确保模型目录存在
         self.ensure_model_dir()
         
@@ -104,7 +107,8 @@ class SSQLSTMModel:
             with open(scaler_path, 'wb') as f:
                 pickle.dump({
                     'red_scaler': self.red_scaler,
-                    'blue_scaler': self.blue_scaler
+                    'blue_scaler': self.blue_scaler,
+                    'scaler': self.scaler  # 兼容性scaler
                 }, f)
             
             logger.info(f"模型已保存：{model_path}")
@@ -133,6 +137,8 @@ class SSQLSTMModel:
                     scalers = pickle.load(f)
                     self.red_scaler = scalers['red_scaler']
                     self.blue_scaler = scalers['blue_scaler']
+                    if 'scaler' in scalers:
+                        self.scaler = scalers['scaler']
                 logger.info(f"缩放器已加载：{scaler_path}")
             else:
                 logger.warning(f"缩放器文件不存在：{scaler_path}")
@@ -166,8 +172,71 @@ class SSQLSTMModel:
             logger.error(f"构建模型失败: {e}")
             return None
     
-    def train_model(self, df, training_periods=None):
-        """训练LSTM模型 - GitHub Actions优化版本"""
+    def prepare_data(self, df, training_periods=None):
+        """数据预处理 - 兼容原程序和新版本"""
+        try:
+            if training_periods is None:
+                # 使用全部数据
+                df_train = df.copy()
+                logger.info(f"使用全部数据进行训练，共 {len(df_train)} 期")
+            else:
+                df_train = df.tail(training_periods).copy()
+                logger.info(f"使用最近 {training_periods} 期数据进行训练")
+            
+            if len(df_train) < self.window_length + 1:
+                logger.error(f"数据量不足，需要至少 {self.window_length + 1} 期数据")
+                return None, None, None
+            
+            # 特征列
+            red_cols = [f'red_{i}' for i in range(1, 7)]
+            blue_col = 'blue'
+            
+            # 提取红球和蓝球数据
+            red_data = df_train[red_cols].values
+            blue_data = df_train[blue_col].values.reshape(-1, 1)
+            
+            # 数据标准化
+            red_scaled = self.red_scaler.fit_transform(red_data)
+            blue_scaled = self.blue_scaler.fit_transform(blue_data)
+            
+            # 合并特征，同时设置兼容性scaler
+            all_data = np.hstack([red_scaled, blue_scaled])
+            self.scaler = StandardScaler()
+            all_data_normalized = self.scaler.fit_transform(all_data)
+            
+            # 创建序列数据
+            X, y = [], []
+            for i in range(len(all_data_normalized) - self.window_length):
+                X.append(all_data_normalized[i:(i + self.window_length)])
+                y.append(all_data_normalized[i + self.window_length])
+            
+            X = np.array(X)
+            y = np.array(y)
+            
+            logger.info(f"数据预处理完成，训练集形状: X={X.shape}, y={y.shape}")
+            return X, y, df_train
+            
+        except Exception as e:
+            logger.error(f"数据预处理失败: {e}")
+            return None, None, None
+    
+    def train_model(self, x_train=None, y_train=None, epochs=None, batch_size=None, learning_rate=None):
+        """训练模型 - 兼容原程序接口
+        
+        支持两种调用方式：
+        1. train_model(df) - 新的GitHub Actions方式  
+        2. train_model(x_train, y_train, epochs, batch_size, learning_rate) - 原程序方式
+        """
+        # 如果第一个参数是DataFrame，使用新的方式
+        if hasattr(x_train, 'columns'):  # 检查是否是DataFrame
+            df = x_train
+            return self._train_model_github_actions(df)
+        
+        # 否则使用原程序的方式
+        return self._train_model_original(x_train, y_train, epochs, batch_size, learning_rate)
+    
+    def _train_model_github_actions(self, df, training_periods=None):
+        """GitHub Actions优化的训练方式"""
         try:
             if IS_GITHUB_ACTIONS:
                 print("::group::LSTM模型训练")
@@ -179,11 +248,14 @@ class SSQLSTMModel:
                 training_periods = len(df)
             
             # 数据准备
-            X_train, y_train = self.prepare_data(df, training_periods)
+            X_train, y_train, df_work = self.prepare_data(df, training_periods)
             
             if X_train is None or len(X_train) == 0:
                 logger.error("训练数据准备失败")
                 return None
+            
+            # 保存训练数据信息用于后续获取模型信息
+            self._last_training_df = df_work
             
             # 构建模型
             input_shape = (X_train.shape[1], X_train.shape[2])
@@ -198,136 +270,124 @@ class SSQLSTMModel:
             
             class ProgressCallback(Callback):
                 def __init__(self, total_epochs=1200):
-                    super().__init__()
                     self.total_epochs = total_epochs
                     self.last_reported = -1
-                
-                def on_epoch_end(self, epoch, logs=None):
-                    progress = (epoch + 1) / self.total_epochs
-                    loss = logs.get("loss", 0) if logs else 0
                     
-                    if IS_GITHUB_ACTIONS:
-                        # GitHub Actions环境 - 每10%或每100轮报告一次
-                        progress_pct = int(progress * 100)
-                        if progress_pct != self.last_reported and (progress_pct % 10 == 0 or (epoch + 1) % 100 == 0):
-                            print(f"::notice::训练进度 {progress_pct}% ({epoch + 1}/{self.total_epochs}) Loss: {loss:.6f}")
-                            self.last_reported = progress_pct
-                    else:
-                        # 本地控制台环境
-                        if (epoch + 1) % 100 == 0 or epoch == 0:
-                            print(f'训练进度: {epoch + 1}/{self.total_epochs} epochs, Loss: {loss:.6f}')
+                def on_epoch_end(self, epoch, logs=None):
+                    if IS_GITHUB_ACTIONS and epoch % 100 == 0:
+                        progress = int((epoch + 1) / self.total_epochs * 100)
+                        if progress != self.last_reported:
+                            print(f"::notice::训练进度: {progress}% (Epoch {epoch + 1}/{self.total_epochs})")
+                            self.last_reported = progress
             
-            # 创建回调
-            callback = ProgressCallback(self.epochs)
+            callbacks = [ProgressCallback(self.epochs)]
             
             # 训练模型
-            logger.info(f"开始训练，参数：批次大小={self.batch_size}, 训练轮数={self.epochs}")
-            
             history = self.model.fit(
                 X_train, y_train,
                 epochs=self.epochs,
                 batch_size=self.batch_size,
                 validation_split=0.2,
-                callbacks=[callback],
-                verbose=0  # 静默训练，使用自定义回调显示进度
+                callbacks=callbacks,
+                verbose=0 if IS_GITHUB_ACTIONS else 1
             )
             
             if IS_GITHUB_ACTIONS:
                 print("::endgroup::")
-                print("::notice title=训练完成::LSTM模型训练成功完成")
-            else:
-                print('✅ 训练完成！')
             
+            logger.info("模型训练完成")
             return history
             
         except Exception as e:
-            logger.error(f"训练过程出错: {e}")
+            logger.error(f"模型训练失败: {e}")
             if IS_GITHUB_ACTIONS:
                 print("::endgroup::")
-                print(f"::error title=训练失败::{e}")
+            return None
+    
+    def _train_model_original(self, x_train, y_train, epochs, batch_size, learning_rate):
+        """原程序的训练方式"""
+        try:
+            # 更新参数
+            if epochs:
+                self.epochs = epochs
+            if batch_size:
+                self.batch_size = batch_size
+            
+            # 构建模型
+            input_shape = (x_train.shape[1], x_train.shape[2])
+            self.model = self.build_model(input_shape)
+            
+            if self.model is None:
+                return None
+            
+            # 如果指定了学习率，重新编译模型
+            if learning_rate:
+                from tensorflow.keras.optimizers import Adam
+                optimizer = Adam(learning_rate=learning_rate)
+                self.model.compile(optimizer=optimizer, loss='mse', metrics=['accuracy'])
+            
+            # 训练模型
+            history = self.model.fit(
+                x_train, y_train,
+                epochs=self.epochs,
+                batch_size=self.batch_size,
+                validation_split=0.2,
+                verbose=0 if IS_GITHUB_ACTIONS else 1
+            )
+            
+            logger.info("模型训练完成")
+            return history
+            
+        except Exception as e:
+            logger.error(f"模型训练失败: {e}")
             return None
     
     def plot_training_history(self, history):
-        """绘制训练损失曲线 - GitHub Actions优化版本"""
-        if history is None:
-            return None
-        
-        if HAS_MATPLOTLIB:
-            try:
-                # 使用matplotlib（GitHub Actions或本地环境）
-                plt.figure(figsize=(10, 6))
-                plt.plot(history.history['loss'], label='训练损失', color='blue')
-                
-                if 'val_loss' in history.history:
-                    plt.plot(history.history['val_loss'], label='验证损失', color='red')
-                
-                plt.title('训练损失曲线')
-                plt.xlabel('训练轮数 (Epochs)')
-                plt.ylabel('损失值 (Loss)')
-                plt.legend()
-                plt.grid(True)
-                
-                # 保存图片（非交互环境）
-                if IS_GITHUB_ACTIONS:
-                    plot_path = 'training_history.png'
-                    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
-                    print(f"::notice::训练曲线已保存到 {plot_path}")
-                
-                plt.close()  # 释放内存
-                return None
-                
-            except Exception as e:
-                logger.error(f"绘制训练曲线失败: {e}")
-        else:
+        """绘制训练历史 - GitHub Actions优化版本"""
+        if not HAS_MATPLOTLIB:
             logger.warning("matplotlib不可用，跳过训练曲线绘制")
-        
-        return None
-    
-    def prepare_data(self, df, training_periods=None):
-        """数据预处理 - 使用全部数据"""
+            return None
+            
         try:
-            if training_periods is None:
-                # 使用全部数据
-                df_train = df.copy()
-                logger.info(f"使用全部数据进行训练，共 {len(df_train)} 期")
+            plt.figure(figsize=(12, 4))
+            
+            # 训练损失
+            plt.subplot(1, 2, 1)
+            plt.plot(history.history['loss'], label='训练损失')
+            if 'val_loss' in history.history:
+                plt.plot(history.history['val_loss'], label='验证损失')
+            plt.title('模型损失')
+            plt.xlabel('Epoch')
+            plt.ylabel('Loss')
+            plt.legend()
+            
+            # 训练准确率
+            plt.subplot(1, 2, 2)
+            if 'accuracy' in history.history:
+                plt.plot(history.history['accuracy'], label='训练准确率')
+            if 'val_accuracy' in history.history:
+                plt.plot(history.history['val_accuracy'], label='验证准确率')
+            plt.title('模型准确率')
+            plt.xlabel('Epoch')
+            plt.ylabel('Accuracy')
+            plt.legend()
+            
+            plt.tight_layout()
+            
+            # 保存图片
+            if IS_GITHUB_ACTIONS:
+                plt.savefig('training_history.png', dpi=150, bbox_inches='tight')
+                print("::notice::训练历史图表已保存到 training_history.png")
             else:
-                df_train = df.tail(training_periods).copy()
-                logger.info(f"使用最近 {training_periods} 期数据进行训练")
+                plt.savefig('training_history.png', dpi=150, bbox_inches='tight')
+                logger.info("训练历史图表已保存")
             
-            if len(df_train) < self.window_length + 1:
-                logger.error(f"数据量不足，需要至少 {self.window_length + 1} 期数据")
-                return None, None
-            
-            # 特征列
-            red_cols = [f'red_{i}' for i in range(1, 7)]
-            blue_col = 'blue'
-            
-            # 提取红球和蓝球数据
-            red_data = df_train[red_cols].values
-            blue_data = df_train[blue_col].values.reshape(-1, 1)
-            
-            # 数据标准化
-            red_scaled = self.red_scaler.fit_transform(red_data)
-            blue_scaled = self.blue_scaler.fit_transform(blue_data)
-            
-            # 合并特征
-            all_data = np.hstack([red_scaled, blue_scaled])
-            
-            # 创建序列数据
-            X, y = [], []
-            for i in range(len(all_data) - self.window_length):
-                X.append(all_data[i:(i + self.window_length)])
-                y.append(all_data[i + self.window_length])
-            
-            X = np.array(X)
-            y = np.array(y)
-            
-            logger.info(f"数据预处理完成，训练集形状: X={X.shape}, y={y.shape}")
-            return X, y
-            
+            plt.close()
+            return None
+                
         except Exception as e:
-            logger.error(f"数据预处理失败: {e}")
-            return None, None
+            logger.error(f"绘制训练曲线失败: {e}")
+            return None
     
     def predict_next_numbers(self, df):
         """预测下期号码"""
@@ -353,18 +413,25 @@ class SSQLSTMModel:
             
             # 合并特征
             input_data = np.hstack([red_scaled, blue_scaled])
+            
+            # 使用兼容性scaler进行标准化
+            if hasattr(self.scaler, 'transform'):
+                input_data = self.scaler.transform(input_data)
+            
             input_data = input_data.reshape(1, self.window_length, -1)
             
             # 预测
             prediction = self.model.predict(input_data, verbose=0)
             
             # 反标准化
-            red_pred = prediction[0][:6]
-            blue_pred = prediction[0][6:7]
+            if hasattr(self.scaler, 'inverse_transform'):
+                prediction_denorm = self.scaler.inverse_transform(prediction)
+            else:
+                prediction_denorm = prediction
             
             # 转换为实际号码
-            red_numbers = self._convert_to_red_numbers(red_pred)
-            blue_number = self._convert_to_blue_number(blue_pred)
+            red_numbers = self._convert_to_red_numbers(prediction_denorm[0][:6])
+            blue_number = self._convert_to_blue_number(prediction_denorm[0][6:7])
             
             predicted_numbers = red_numbers + [blue_number]
             logger.info(f"预测完成：{predicted_numbers}")
@@ -374,6 +441,18 @@ class SSQLSTMModel:
         except Exception as e:
             logger.error(f"预测失败: {e}")
             return None
+    
+    def predict_next_period(self, df, next_period):
+        """原程序的核心预测方法 - 兼容性接口
+        
+        Args:
+            df: 数据框架
+            next_period: 下期期号
+            
+        Returns:
+            预测的号码数组
+        """
+        return self.predict_next_numbers(df)
     
     def _convert_to_red_numbers(self, predictions):
         """将预测结果转换为红球号码"""
@@ -412,5 +491,6 @@ class SSQLSTMModel:
             'window_length': self.window_length,
             'red_ball_count': self.red_ball_count,
             'blue_ball_count': self.blue_ball_count,
-            'model_trained': self.model is not None
-        }
+            'model_trained': self.model is not None,
+            'training_periods': len(getattr(self, '_last_training_df', [])) if hasattr(self, '_last_training_df') else '全部'
+        } 

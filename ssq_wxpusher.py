@@ -19,8 +19,9 @@ IS_GITHUB_ACTIONS = os.getenv('GITHUB_ACTIONS') == 'true'
 # 配置日志
 logger = logging.getLogger(__name__)
 
-# 微信推送配置 - GitHub Actions优化版本
-APP_TOKEN = os.getenv("WXPUSHER_APP_TOKEN", "AT_FInZJJ0mUU8xvQjKRP7v6omvuHN3Fdqw")
+# 微信推送配置 - GitHub Actions优化版本  
+# 使用新的有效Token
+APP_TOKEN = os.getenv("WXPUSHER_APP_TOKEN", "AT_uTJ5DKtOY0QP8qkVb0ipOHuPE3Nxjjwl")
 
 # 固定用户UID - 根据用户要求
 FIXED_USER_UID = "UID_yYObqdMVScIa66DGR2n2PCRFL10w"

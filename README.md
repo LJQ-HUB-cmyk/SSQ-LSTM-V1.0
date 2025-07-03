@@ -46,7 +46,7 @@ git status
 git add .
 
 # 3. 提交更改
-git commit -m "📊 优化适合工作流"
+git commit -m "📊 解决工作流报错"
 
 # 4. 推送到远程仓库
 git push origin main
