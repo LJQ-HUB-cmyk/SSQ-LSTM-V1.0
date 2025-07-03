@@ -76,11 +76,19 @@ def send_message(content, summary=None, content_type=1, uids=None, topic_ids=Non
     """
     发送微信推送消息 - GitHub Actions优化版本
     """
-    if not APP_TOKEN:
+    if not APP_TOKEN or APP_TOKEN.strip() == "":
         error_msg = "微信推送Token未配置"
         logger.error(error_msg)
         if IS_GITHUB_ACTIONS:
             print(f"::error title=配置错误::{error_msg}")
+        return False
+    
+    # 检查Token格式是否有效
+    if not APP_TOKEN.startswith("AT_") or len(APP_TOKEN) < 10:
+        error_msg = f"微信推送Token格式无效: {APP_TOKEN[:10]}..."
+        logger.error(error_msg)
+        if IS_GITHUB_ACTIONS:
+            print(f"::error title=Token格式错误::{error_msg}")
         return False
     
     # 构建消息数据
@@ -353,8 +361,17 @@ def send_daily_summary(prediction_success: bool, verification_success: bool,
 
 def test_wxpusher_connection():
     """测试微信推送连接"""
-    if not APP_TOKEN:
+    if not APP_TOKEN or APP_TOKEN.strip() == "":
         logger.warning("微信推送Token未配置，跳过测试")
+        if IS_GITHUB_ACTIONS:
+            print("::warning::微信推送Token未配置，跳过测试")
+        return False
+    
+    # 检查Token格式
+    if not APP_TOKEN.startswith("AT_") or len(APP_TOKEN) < 10:
+        logger.warning(f"微信推送Token格式可能无效: {APP_TOKEN[:10]}...")
+        if IS_GITHUB_ACTIONS:
+            print(f"::warning::微信推送Token格式可能无效")
         return False
     
     try:

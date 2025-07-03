@@ -109,11 +109,24 @@ class SSQAutomation:
                         ] + [int(latest['actual_blue'])]
                         
                         # 发送验证报告
-                        send_verification_report(
-                            int(latest['target_period']), 
-                            predicted, 
-                            actual
-                        )
+                        # 发送验证报告（如果微信推送可用）
+                        try:
+                            verification_data = {
+                                'eval_period': int(latest['target_period']),
+                                'predicted_red': predicted[:6],
+                                'predicted_blue': predicted[6],
+                                'prize_red': actual[:6],
+                                'prize_blue': actual[6],
+                                'red_hits': int(latest['red_hits']),
+                                'blue_hit': int(latest['blue_hit']),
+                                'total_hits': int(latest['total_hits'])
+                            }
+                            send_verification_report(verification_data)
+                            logger.info("验证报告推送成功")
+                        except Exception as e:
+                            logger.warning(f"验证报告推送失败: {e}")
+                            if IS_GITHUB_ACTIONS:
+                                print(f"::warning::验证报告推送失败: {e}")
                         
                         return True
             
@@ -164,7 +177,7 @@ class SSQAutomation:
                 raise Exception("预测失败")
             
             # 确定预测期号
-            latest_period = df.iloc[-1]['period']
+            latest_period = df.iloc[-1]['Seq']
             target_period = latest_period + 1
             
             logger.info(f"预测第 {target_period} 期号码: {predicted_numbers}")
@@ -207,10 +220,15 @@ class SSQAutomation:
             logger.info("开始运行双色球LSTM预测自动化流程...")
             
             # 测试微信推送
-            if not test_wxpusher_connection():
-                logger.warning("微信推送测试失败，但继续执行流程")
+            wxpusher_available = test_wxpusher_connection()
+            if not wxpusher_available:
+                logger.warning("微信推送不可用，将跳过推送步骤，继续执行预测流程")
                 if IS_GITHUB_ACTIONS:
-                    print("::warning::微信推送测试失败，但继续执行流程")
+                    print("::warning::微信推送不可用，将跳过推送步骤，继续执行预测流程")
+            else:
+                logger.info("微信推送连接正常")
+                if IS_GITHUB_ACTIONS:
+                    print("::notice::微信推送连接正常")
             
             # 1. 获取数据
             logger.info("步骤 1/4: 获取最新数据")
@@ -228,15 +246,32 @@ class SSQAutomation:
             
             if predicted_numbers is not None:
                 prediction_success = True
-                latest_period = df.iloc[-1]['period']
+                latest_period = df.iloc[-1]['Seq']
                 prediction_period = latest_period + 1
                 
                 # 4. 发送预测报告
                 logger.info("步骤 4/4: 发送预测报告")
-                send_prediction_report(prediction_period, predicted_numbers, model_params, training_info)
+                if wxpusher_available:
+                    try:
+                        send_prediction_report(prediction_period, predicted_numbers, model_params, training_info)
+                        logger.info("预测报告推送成功")
+                    except Exception as e:
+                        logger.warning(f"预测报告推送失败，但预测流程已完成: {e}")
+                        if IS_GITHUB_ACTIONS:
+                            print(f"::warning::预测报告推送失败: {e}")
+                else:
+                    logger.info("跳过预测报告推送（微信推送不可用）")
             
             # 发送日报摘要
-            send_daily_summary(prediction_success, verification_success, prediction_period, error_messages)
+            if wxpusher_available:
+                try:
+                    send_daily_summary(prediction_success, verification_success, prediction_period, error_messages)
+                except Exception as e:
+                    logger.warning(f"日报摘要推送失败: {e}")
+                    if IS_GITHUB_ACTIONS:
+                        print(f"::warning::日报摘要推送失败: {e}")
+            else:
+                logger.info("跳过日报摘要推送（微信推送不可用）")
             
             if IS_GITHUB_ACTIONS:
                 print("::endgroup::")
@@ -255,10 +290,16 @@ class SSQAutomation:
                 print(f"::error title=流程失败::{error_msg}")
             
             # 发送错误通知
-            send_error_notification(str(e))
+            try:
+                send_error_notification(str(e))
+            except Exception as push_error:
+                logger.warning(f"错误通知推送失败: {push_error}")
             
-            # 即使失败也发送日报摘要
-            send_daily_summary(prediction_success, verification_success, prediction_period, error_messages)
+            # 即使失败也尝试发送日报摘要
+            try:
+                send_daily_summary(prediction_success, verification_success, prediction_period, error_messages)
+            except Exception as summary_error:
+                logger.warning(f"日报摘要推送失败: {summary_error}")
 
 def main():
     """主函数"""

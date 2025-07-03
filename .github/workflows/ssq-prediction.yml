@@ -64,6 +64,12 @@ jobs:
         WXPUSHER_TOPIC_IDS: ${{ secrets.WXPUSHER_TOPIC_IDS }}
       run: |
         echo "开始运行双色球LSTM预测系统..."
+        echo "检查微信推送配置..."
+        if [ -z "$WXPUSHER_APP_TOKEN" ]; then
+          echo "::warning::WXPUSHER_APP_TOKEN未在Secrets中配置，将使用默认Token"
+        else
+          echo "::notice::检测到WXPUSHER_APP_TOKEN配置"
+        fi
         python -u ssq_automation.py
         
     - name: Check output files
