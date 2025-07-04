@@ -1,10 +1,10 @@
-name: SSQ LSTM Prediction
+#name: SSQ LSTM Prediction
 
-on:
+#on:
   schedule:
     # 周一、周三、周五北京时间6:00 (UTC+8, 所以UTC时间是22:00前一天)
     - cron: '0 22 * * 0,2,4'  # UTC时间周日、周二、周四22:00
-  workflow_dispatch:  # 允许手动触发
+  #workflow_dispatch:  # 允许手动触发
 
 env:
   PYTHON_VERSION: '3.9'
